@@ -1,0 +1,12 @@
+# Secrets
+*.pem
+.env
+secrets.h
+
+# Compilation STM32CubeIDE
+**/Debug/
+**/Release/
+
+# Python
+__pycache__/
+*.db
