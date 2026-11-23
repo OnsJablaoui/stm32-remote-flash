@@ -1,0 +1,32 @@
+services:
+  caddy:
+    image: caddy:latest
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+
+  portainer:
+    image: portainer/portainer-ce:latest
+    restart: unless-stopped
+    ports:
+      - "9443:9443"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - portainer_data:/data
+
+  api:
+    build: ./api
+    restart: unless-stopped
+    environment:
+      AGENT_KEY: ${AGENT_KEY}
+    volumes:
+      - api_data:/data
+
+volumes:
+  caddy_data:
+  portainer_data:
+  api_data:
