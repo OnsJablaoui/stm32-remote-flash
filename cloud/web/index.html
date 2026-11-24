@@ -1,0 +1,140 @@
+﻿<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Laboratoire STM32 à distance</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 860px; margin: 2rem auto; padding: 0 1rem; color: #1f2328; background: #f6f8fa; }
+  h1 { font-size: 1.5rem; margin-bottom: .25rem; }
+  .sous-titre { color: #57606a; margin-top: 0; }
+  .carte { background: #fff; border: 1px solid #d0d7de; border-radius: 10px; padding: 1rem 1.25rem; margin: 1rem 0; }
+  h2 { font-size: 1.1rem; margin-top: 0; }
+  button { background: #1f6feb; color: #fff; border: 0; border-radius: 6px; padding: .5rem 1rem; cursor: pointer; font-size: 1rem; }
+  button:disabled { background: #8c959f; cursor: default; }
+  .etat { display: inline-block; padding: .1rem .6rem; border-radius: 999px; font-size: .85rem; font-weight: normal; }
+  .en_attente { background: #fff8c5; color: #7d4e00; }
+  .en_cours { background: #ddf4ff; color: #0550ae; }
+  .termine { background: #dafbe1; color: #116329; }
+  .echec { background: #ffebe9; color: #a40e26; }
+  pre { background: #0d1117; color: #e6edf3; padding: .75rem; border-radius: 6px; min-height: 3rem; white-space: pre-wrap; }
+  table { width: 100%; border-collapse: collapse; font-size: .9rem; }
+  th, td { text-align: left; padding: .4rem .3rem; border-bottom: 1px solid #d0d7de; }
+  tr.cliquable { cursor: pointer; }
+  tr.cliquable:hover { background: #f6f8fa; }
+  .erreur { color: #a40e26; }
+  .info { color: #57606a; font-size: .9rem; }
+</style>
+</head>
+<body>
+<h1>Laboratoire STM32 à distance</h1>
+<p class="sous-titre">Envoyez un programme compilé (.bin) : il sera écrit sur une vraie carte STM32, puis exécuté.</p>
+
+<div class="carte">
+  <h2>Envoyer un programme</h2>
+  <form id="formulaire">
+    <input type="file" id="fichier" accept=".bin">
+    <button type="submit" id="bouton">Exécuter</button>
+  </form>
+  <p class="info">Fichier .bin, 256 Ko maximum. Exécution limitée à 30 secondes, ou jusqu'à la ligne « FIN ».</p>
+  <p id="message" class="erreur"></p>
+</div>
+
+<div class="carte">
+  <h2>Résultat <span id="etat"></span></h2>
+  <p id="details" class="info">Aucun programme sélectionné.</p>
+  <pre id="sortie"></pre>
+</div>
+
+<div class="carte">
+  <h2>Historique</h2>
+  <table>
+    <thead><tr><th>Fichier</th><th>Taille</th><th>Déposé le</th><th>État</th></tr></thead>
+    <tbody id="historique"></tbody>
+  </table>
+</div>
+
+<script>
+const API = "/api";
+const LIBELLES = { en_attente: "En attente", en_cours: "En cours", termine: "Terminé", echec: "Échec" };
+let minuterie = null;
+
+function badge(statut) {
+  const s = document.createElement("span");
+  s.className = "etat " + statut;
+  s.textContent = LIBELLES[statut] || statut;
+  return s;
+}
+
+function heure(iso) {
+  return iso ? new Date(iso).toLocaleString("fr-FR") : "";
+}
+
+async function afficherTravail(id) {
+  clearTimeout(minuterie);
+  const r = await fetch(`${API}/jobs/${id}`);
+  if (!r.ok) return;
+  const t = await r.json();
+  document.getElementById("etat").replaceChildren(badge(t.status));
+  let d = `${t.filename} · ${t.size} octets · déposé le ${heure(t.created_at)}`;
+  if (t.chip_id) d += ` · puce ${t.chip_id}`;
+  if (t.end_reason) d += ` · fin : ${t.end_reason === "FIN" ? "message FIN reçu" : "durée maximale atteinte"}`;
+  document.getElementById("details").textContent = d;
+  const sortie = document.getElementById("sortie");
+  if (t.status === "echec") sortie.textContent = "Erreur : " + (t.error || "inconnue");
+  else if (t.status === "termine") sortie.textContent = t.output || "(aucune sortie)";
+  else if (t.status === "en_attente") sortie.textContent = "En attente de la carte...";
+  else sortie.textContent = "Programmation et exécution en cours...";
+  if (t.status === "en_attente" || t.status === "en_cours") {
+    minuterie = setTimeout(() => afficherTravail(id), 2000);
+  }
+}
+
+async function chargerHistorique() {
+  const r = await fetch(`${API}/jobs`);
+  if (!r.ok) return;
+  const liste = await r.json();
+  document.getElementById("historique").replaceChildren(...liste.map(t => {
+    const tr = document.createElement("tr");
+    tr.className = "cliquable";
+    tr.onclick = () => afficherTravail(t.id);
+    for (const v of [t.filename, t.size + " o", heure(t.created_at)]) {
+      const td = document.createElement("td");
+      td.textContent = v;
+      tr.appendChild(td);
+    }
+    const td = document.createElement("td");
+    td.appendChild(badge(t.status));
+    tr.appendChild(td);
+    return tr;
+  }));
+}
+
+document.getElementById("formulaire").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const message = document.getElementById("message");
+  const bouton = document.getElementById("bouton");
+  message.textContent = "";
+  const fichier = document.getElementById("fichier").files[0];
+  if (!fichier) { message.textContent = "Choisissez d'abord un fichier .bin."; return; }
+  const donnees = new FormData();
+  donnees.append("fichier", fichier);
+  bouton.disabled = true;
+  try {
+    const r = await fetch(`${API}/jobs`, { method: "POST", body: donnees });
+    const t = await r.json();
+    if (!r.ok) { message.textContent = t.detail || "Envoi refusé."; return; }
+    afficherTravail(t.id);
+    chargerHistorique();
+  } catch {
+    message.textContent = "Serveur injoignable.";
+  } finally {
+    bouton.disabled = false;
+  }
+});
+
+chargerHistorique();
+setInterval(chargerHistorique, 5000);
+</script>
+</body>
+</html>

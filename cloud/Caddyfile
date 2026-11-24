@@ -3,6 +3,7 @@
         reverse_proxy api:8000
     }
     handle {
-        respond "Plateforme STM32 - en construction" 200
+        root * /srv
+        file_server
     }
 }
