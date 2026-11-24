@@ -1,12 +1,23 @@
 #include "firmware.h"
 #include "driver/uart.h"
 
-#define STM_RX     16          // RX2 de l'ESP32 <- A9 de la Blue Pill
-#define STM_TX     17          // TX2 de l'ESP32 -> A10 de la Blue Pill
+#define STM_RX     16          // RX2 <- A9
+#define STM_TX     17          // TX2 -> A10
+#define PIN_BOOT0  18          // -> broche du milieu de BOOT0
+#define PIN_NRST   19          // -> R
 #define ACK        0x79
 #define FLASH_ADDR 0x08000000UL
 
 HardwareSerial stm(2);
+
+void resetStm(bool modeBootloader) {
+  digitalWrite(PIN_BOOT0, modeBootloader ? HIGH : LOW);
+  pinMode(PIN_NRST, OUTPUT);
+  digitalWrite(PIN_NRST, LOW);     // reset actif
+  delay(20);
+  pinMode(PIN_NRST, INPUT);        // relâché
+  delay(50);
+}
 
 int lireOctet(uint32_t delaiMs) {
   uint32_t debut = millis();
@@ -37,13 +48,23 @@ bool envoyerAdresse(uint32_t adr) {
   return attendreAck(500);
 }
 
+bool synchroniser() {
+  for (int essai = 0; essai < 3; essai++) {
+    resetStm(true);
+    while (stm.available()) stm.read();
+    stm.write(0x7F);
+    if (lireOctet(500) == ACK) return true;
+  }
+  return false;
+}
+
 bool effacer() {
-  if (envoyerCommande(0x43)) {             // effacement classique
+  if (envoyerCommande(0x43)) {
     stm.write(0xFF);
     stm.write(0x00);
     return attendreAck(20000);
   }
-  if (envoyerCommande(0x44)) {             // effacement étendu
+  if (envoyerCommande(0x44)) {
     stm.write(0xFF);
     stm.write(0xFF);
     stm.write(0x00);
@@ -80,26 +101,22 @@ bool lireBloc(uint32_t adr, uint8_t *buf, int n) {
 }
 
 void arret() {
-  Serial.println("Termine.");
+  Serial.println("Termine. Appuyez sur EN pour recommencer.");
   while (true) delay(1000);
 }
 
 void setup() {
   Serial.begin(115200);
+  pinMode(PIN_BOOT0, OUTPUT);
+  digitalWrite(PIN_BOOT0, LOW);
+  pinMode(PIN_NRST, INPUT);
   stm.begin(115200, SERIAL_8E1, STM_RX, STM_TX);
   delay(1000);
   Serial.println();
-  Serial.println("Pret. Appuyez sur RESET de la Blue Pill.");
-}
 
-void loop() {
-  while (stm.available()) stm.read();
-  stm.write(0x7F);
-  if (lireOctet(500) != ACK) {
-    delay(2000);
-    return;                                // on réessaie
-  }
-  Serial.println("1. Bootloader : OK");
+  Serial.print("1. Bootloader... ");
+  if (!synchroniser()) { Serial.println("ECHEC"); arret(); }
+  Serial.println("OK");
 
   Serial.print("2. Effacement... ");
   if (!effacer()) { Serial.println("ECHEC"); arret(); }
@@ -112,7 +129,7 @@ void loop() {
     if (n > 256) n = 256;
     memset(bloc, 0xFF, sizeof(bloc));
     memcpy(bloc, firmware + off, n);
-    int n4 = (n + 3) & ~3;                 // multiple de 4
+    int n4 = (n + 3) & ~3;
     if (!ecrireBloc(FLASH_ADDR + off, bloc, n4)) {
       Serial.printf("ECHEC a 0x%08lX\n", (unsigned long)(FLASH_ADDR + off));
       arret();
@@ -133,19 +150,16 @@ void loop() {
   }
   Serial.println("OK");
 
-    Serial.print("5. Demarrage du programme... ");
-  if (!(envoyerCommande(0x21) && envoyerAdresse(FLASH_ADDR))) {
-    Serial.println("ECHEC");
-    arret();
-  }
-  uart_set_parity(UART_NUM_2, UART_PARITY_DISABLE);   // passage en 8N1
-  Serial.println("OK");
+  Serial.println("5. Demarrage normal (BOOT0 = 0, reset)");
+  uart_set_parity(UART_NUM_2, UART_PARITY_DISABLE);   // 8N1 avant le reset
+  while (stm.available()) stm.read();
+  resetStm(false);
 
   Serial.println("6. Sortie du programme :");
   String ligne = "";
   uint32_t debut = millis();
   bool fin = false;
-  while (millis() - debut < 30000 && !fin) {          // 30 s maximum
+  while (millis() - debut < 30000 && !fin) {
     if (stm.available()) {
       char c = stm.read();
       if (c == '\n') {
@@ -161,3 +175,5 @@ void loop() {
   Serial.println(fin ? "Fin : message FIN recu" : "Fin : duree maximale atteinte");
   arret();
 }
+
+void loop() {}
