@@ -165,7 +165,7 @@ def connexion(ident: Identifiants, response: Response):
             (token, row["id"], expire),
         )
     response.set_cookie(
-        "session", token, httponly=True, samesite="strict",
+        "session", token, httponly=True, samesite="strict", secure=True,
         max_age=int(DUREE_SESSION.total_seconds()),
     )
     return {"username": ident.username}

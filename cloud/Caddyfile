@@ -1,9 +1,18 @@
-:80 {
+16-192-140-170.sslip.io {
     handle /api/* {
         reverse_proxy api:8000
     }
     handle {
         root * /srv
         file_server
+    }
+}
+
+:80 {
+    handle /api/agent/* {
+        reverse_proxy api:8000
+    }
+    handle {
+        redir https://16-192-140-170.sslip.io{uri}
     }
 }
